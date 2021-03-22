@@ -1,40 +1,27 @@
-default:
-  trainer: ppo
+behaviors:
 
-  beta: 1.0e-2
-  epsilon: 0.2
-  lambd: 0.95
-
-  learning_rate: 3.0e-4
-  learning_rate_schedule: linear
-
-  max_steps: 1.0e8
-  summary_freq: 50000
-
-  normalize: false
-  num_epoch: 3
-  num_layers: 3
-  hidden_units: 256
-  
-  use_recurrent: false
-  sequence_length: 64
-  memory_size: 128
-
-  vis_encode_type: simple
-
-  reward_signals:
-    extrinsic:
-      strength: 1.0
-      gamma: 0.99
-
-BikeContinuous:
-  time_horizon: 256
-  batch_size: 2048
-  buffer_size: 20480
-
-BikeDiscrete:
-  time_horizon: 256
-  batch_size: 128
-  buffer_size: 2048
-
-
+  Driver:
+    trainer_type: ppo
+    hyperparameters:
+      batch_size: 1024
+      buffer_size: 98304 # 12 x 4
+      learning_rate: 0.0003
+      beta: 0.01
+      epsilon: 0.2
+      lambd: 0.95
+      num_epoch: 3
+      learning_rate_schedule: linear
+    network_settings:
+      normalize: false
+      hidden_units: 256
+      num_layers: 2
+      vis_encode_type: simple
+    reward_signals:
+      extrinsic:
+        gamma: 0.99
+        strength: 1.0
+    keep_checkpoints: 10
+    max_steps: 1e7
+    time_horizon: 512
+    summary_freq: 10000
+    threaded: true

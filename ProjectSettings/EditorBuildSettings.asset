@@ -5,10 +5,7 @@ EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
   m_Scenes:
-  - enabled: 0
-    path: Assets/Scenes/CaveRacer.unity
-    guid: 45db70f3fdee26d4f88af0eee765d53b
   - enabled: 1
-    path: Assets/Scenes/Track.unity
-    guid: daebd3cf916f4b94ba3d3e5b29c4c2fe
+    path: Assets/Scenes/Demo.unity
+    guid: 28578381e6d2a284bb0cfa8e76927c6b
   m_configObjects: {}

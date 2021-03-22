@@ -1,111 +1,167 @@
-﻿using System.Collections.Generic;
+using System;
 using UnityEngine;
+using EasyButtons;
+using Random = UnityEngine.Random;
 
-namespace Hoverbike.Track
+namespace MBaske.Hoverbikes
 {
-    public struct Lane
+    public class Lanes : MonoBehaviour
     {
-        public float min;
-        public float max;
-        public int minInt;
-        public int maxInt;
-        public int index;
+        public const int NumLanes = 4;
 
-        public bool Contains(float val)
+        private const int c_TextureWidth = 32;
+        private const int c_TextureHeight = 8192;
+
+        [SerializeField]
+        private float m_Ratio = 0.5f;
+
+        [Space, SerializeField]
+        private int m_MinSpacing = 10;
+        [SerializeField]
+        private int m_MaxSpacing = 40;
+
+        [Space, SerializeField]
+        private int m_MinLength = 5;
+        [SerializeField]
+        private int m_MaxLength = 15;
+
+        [Space, SerializeField]
+        private int m_DrawOffset = 0;
+
+        [Space, SerializeField]
+        private Color m_Positive;
+        [SerializeField]
+        private Color m_Negative;
+
+        [SerializeField]
+        private Material m_Material;
+        private Texture2D m_Texture;
+        private Color32[] m_Colors;
+
+        private Track m_Track;
+        private int m_TrackLength;
+        private int[,] m_BoostValues;
+
+
+        private void Awake()
         {
-            return val >= min && val <= max;
+            Initialize();
         }
-    }
 
-    public class Lanes
-    {
-        public int Count { get; private set; }
-
-        private List<Lane> lanes;
-
-        public Lanes(List<Lane> lanes)
+        private void Initialize()
         {
-            this.lanes = lanes;
-            Count = lanes.Count;
+            m_Track = GetComponent<Track>();
+            m_TrackLength = m_Track.Length;
+            m_BoostValues = new int[NumLanes, m_TrackLength];
+
+            m_Texture = new Texture2D(32, c_TextureHeight, TextureFormat.RGBA32, false);
+            m_Colors = new Color32[32 * c_TextureHeight];
         }
 
-        public Lanes(int count, float extent, float spacing)
+#if (UNITY_EDITOR)
+        [Button]
+        private void Randomize()
         {
-            Count = count;
-            int nSpaces = count - 1;
-            float total = extent * 2f;
-            float width = total / (float)(count + nSpaces);
-            float space = nSpaces * width * spacing;
-            width = (total - space) / (float)(count);
-            space /= (float)nSpaces;
+            Initialize();
+            RandomizeBoost();
+        }
+#endif
 
-            float min = -extent;
-            lanes = new List<Lane>(count);
-            for (int i = 0; i < count; i++)
+        public int GetBoost(int lane, int i)
+        {
+            return m_BoostValues[lane, (i + m_TrackLength) % m_TrackLength];
+        }
+
+        public void RandomizeBoost()
+        {
+            Array.Clear(m_Colors, 0, m_Colors.Length);
+            Array.Clear(m_BoostValues, 0, m_BoostValues.Length);
+
+            int[,] xPix = GetXPixels();
+
+            for (int iLane = 0; iLane < NumLanes; iLane++)
             {
-                // Normalized -1/+1.
-                lanes.Add(new Lane()
+                int iTrack = 0;
+                while (iTrack < m_TrackLength)
                 {
-                    min = min,
-                    max = min + width,
-                    index = i
-                });
-                min += width + space;
-            }
-        }
+                    iTrack += Random.Range(m_MinSpacing, m_MaxSpacing + 1);
+                    if (iTrack >= m_TrackLength - m_MinLength)
+                    {
+                        // Don't wrap.
+                        break;
+                    }
 
-        public Lane this[int i]
-        {
-            get { return lanes[i]; }
-        }
+                    bool isPositive = Random.value < m_Ratio;
+                    int iMax = iTrack + Random.Range(m_MinLength, m_MaxLength + 1);
+                    iMax = Mathf.Min(iMax, m_TrackLength - 1);
 
-        public IEnumerator<Lane> GetEnumerator()
-        {
-            return lanes.GetEnumerator();
-        }
+                    // Draw with 1px gaps.
+                    Color col = isPositive ? m_Positive : m_Negative;
+                    int yMin = GetYPixel(iTrack);
+                    int yMax = GetYPixel(iMax);
 
-        public bool Contains(float val, out int index)
-        {
-            foreach (Lane lane in lanes)
-            {
-                if (lane.Contains(val))
-                {
-                    index = lane.index;
-                    return true;
+                    for (int y = yMin; y < yMax; y += 2)
+                    {
+                        for (int x = xPix[iLane, 0]; x < xPix[iLane, 5]; x++)
+                        {
+                            m_Colors[y * c_TextureWidth + x] = col;
+                        }
+                    }
+
+                    // Set values, no gaps.
+                    int value = isPositive ? 1 : -1;
+
+                    for (; iTrack < iMax; iTrack++)
+                    {
+                        m_BoostValues[iLane, iTrack] = value;
+                    }
                 }
             }
-            index = -1;
-            return false;
+
+            m_Texture.SetPixels32(m_Colors);
+            m_Texture.Apply();
+            m_Material.mainTexture = m_Texture;
+            m_Material.SetTexture("_EmissionMap", m_Texture);
         }
 
-        public Lanes Scale(float scale)
+        private int GetYPixel(int i)
         {
-            var scaled = new List<Lane>(Count);
-            for (int i = 0; i < Count; i++)
-            {
-                scaled.Add(new Lane()
-                {
-                    min = lanes[i].min * scale,
-                    max = lanes[i].max * scale,
-                    index = lanes[i].index
-                });
-            }
-            return new Lanes(scaled);
+            return Mathf.Clamp(Mathf.FloorToInt(
+                m_Track.GetPoint(i).CumlLengthRatio * c_TextureHeight) - m_DrawOffset,
+                0, c_TextureHeight);
         }
 
-        public Lanes ScaleInt(float scale, int offset)
+        // 4 lanes, each is 6px wide.
+        // TODO Generalize.
+        private int[,] GetXPixels()
         {
-            var scaled = new List<Lane>(Count);
-            for (int i = 0; i < Count; i++)
+            return new int[,]
             {
-                scaled.Add(new Lane()
-                {
-                    minInt = Mathf.RoundToInt(lanes[i].min * scale) + offset,
-                    maxInt = Mathf.RoundToInt(lanes[i].max * scale) + offset,
-                    index = lanes[i].index
-                });
-            }
-            return new Lanes(scaled);
+                { 3, 4, 5, 6, 7, 8 },
+                { 10, 11, 12, 13, 14, 15 },
+                { 17, 18, 19, 20, 21, 22 },
+                { 24, 25, 26, 27, 28, 29 }
+            };
         }
+
+        //private void OnDrawGizmosSelected()
+        //{
+        //    if (m_BoostValues != null)
+        //    {
+        //        for (int i = 0; i < m_Track.Length; i++)
+        //        {
+        //            var p = m_Track.GetPoint(i);
+        //            for (int lane = 0; lane < NumLanes; lane++)
+        //            {
+        //                if (m_BoostValues[lane, i] != 0)
+        //                {
+        //                    float x = lane * 2 - 3;
+        //                    Gizmos.color = m_BoostValues[lane, i] > 0 ? m_Positive : m_Negative;
+        //                    Gizmos.DrawSphere(p.Position + p.Right * -x, 0.25f);
+        //                }
+        //            }
+        //        }
+        //    }
+        //}
     }
 }

@@ -1,289 +1,132 @@
-﻿using UnityEngine;
-using UnityEngine.Audio;
-using Hoverbike.Track;
-using System.Collections.Generic;
+using System.Linq;
+using UnityEngine;
 
-namespace Hoverbike
+namespace MBaske.Hoverbikes
 {
-    [RequireComponent(typeof(Camera))]
     public class AutoCam : MonoBehaviour
     {
-        private enum Mode
-        {
-            None = 0,
-            Sideline = 1,
-            Follow = 2
-        };
-        private Mode mode = Mode.None;
-        private Camera cam;
+        private Track m_Track;
+        private DriverAgent[] m_Agents;
+        private DriverAgent m_TargetAgent;
 
-        [Space, SerializeField]
-        private float clusterLooseness = 20;
         [SerializeField]
-        private float sidelineToFollowRatio = 0.5f;
-        [SerializeField]
-        private float targetYOffset = 2;
+        private float m_FollowDuration = 10;
 
-        [Space, SerializeField]
-        private float sidelineTargetDamp = 0.15f;
         [SerializeField]
-        private float sidelineCameraDamp = 1;
+        private int m_SwitchDistance = 100;
         [SerializeField]
-        private float sidelineXOffset = 6;
+        private int m_StationaryOffset = 200;
         [SerializeField]
-        private float sidelineYOffset = 0;
-        [SerializeField]
-        private float sidelineZOffset = 50;
-        [SerializeField]
-        private float sidelineStopThresh = 20;
-        private Position sidelinePos;
+        private int m_DistanceFollowing = 10;
 
-        [Space, SerializeField]
-        private float followTargetDamp = 0.15f;
-        [SerializeField]
-        private float followCameraDamp = 0.25f;
-        [SerializeField]
-        private float followMinDuration = 4;
-        [SerializeField]
-        private float followMaxDuration = 8;
-        [SerializeField]
-        private float followYOffset = 3;
-        [SerializeField]
-        private float followLeadZOffset = 24;
-        [SerializeField]
-        private float followTailZOffset = 1;
-        private float followZOffset;
-        private bool isFollowingTail;
+        private bool m_IsStationary = true;
+        private bool m_DistanceSwitchEnabled = true;
 
-        // [Space, SerializeField]
-        // private bool enableAutoZoom;
-        // [SerializeField]
-        // private float zoomInFOV = 30;
-        // [SerializeField]
-        // private float zoomOutFOV = 60;
+        [SerializeField]
+        private float m_MoveDampStationary = 1f;
+        [SerializeField]
+        private float m_LookDampStationary = 1f;
 
-        // [SerializeField]
-        // private float zoomInThresh = 90;
-        // [SerializeField]
-        // private float zoomOutThresh = 80;
-        // [SerializeField]
-        // private float zoomDamp = 0.2f;
-        // private float zoomVelocity;
-        // private bool isZoomedIn;
+        [SerializeField]
+        private float m_MoveDampFollow = 0.5f;
+        [SerializeField]
+        private float m_LookDampFollow = 0.5f;
 
-        private Vector3 cameraPos;
-        private Vector3 smoothCameraPos;
-        private Vector3 cameraVelocity;
-        private float cameraDamp;
+        private Vector3 m_CamPos;
+        private Vector3 m_LookDir;
 
-        private BikeAgent targetAgent;
-        private Vector3 smoothTargetPos;
-        private Vector3 targetVelocity;
-        private float targetDamp;
-
-        private BikeAgent[] agents;
-        private TrackManager track;
-        private List<BikeAgent> cluster;
-        private BikeAgent clusterTail;
-        private BikeAgent clusterLead;
-
-        [Space, SerializeField]
-        private AudioMixer audioMixer;
+        private Vector3 m_MoveVlc;
+        private Vector3 m_LookVlc;
 
         private void Awake()
         {
-            cam = GetComponent<Camera>();
-            agents = FindObjectsOfType<BikeAgent>();
-            track = FindObjectOfType<TrackManager>();
-            cluster = new List<BikeAgent>();
-        }
+            m_Track = FindObjectOfType<Track>();
+            m_Agents = FindObjectsOfType<DriverAgent>();
 
-        private void InterpolatePositions()
-        {
-            smoothCameraPos = Vector3.SmoothDamp(
-                smoothCameraPos, 
-                cameraPos,
-                ref cameraVelocity, 
-                cameraDamp);
-            smoothTargetPos = Vector3.SmoothDamp(
-                smoothTargetPos,
-                targetAgent.Position + targetAgent.Shared.CrntPos.Normal * targetYOffset,
-                ref targetVelocity, 
-                targetDamp);
-        }
-
-        private void FindCluster()
-        {
-            cluster.Clear();
-            for (int i = 0; i < agents.Length; i++)
-            {
-                var tmp = new List<BikeAgent>();
-                for (int j = 0; j < agents.Length; j++)
-                {
-                    if (Mathf.Abs(Mathf.DeltaAngle(agents[i].Shared.CrntPos.PosDeg,
-                        agents[j].Shared.CrntPos.PosDeg)) < clusterLooseness)
-                    {
-                        tmp.Add(agents[j]);
-                    }
-                }
-                if (tmp.Count > cluster.Count)
-                {
-                    cluster = tmp;
-                }
-            }
-
-            if (cluster.Count == 1)
-            {
-                // No cluster, find closest excl. previous target.
-                float min = Mathf.Infinity;
-                foreach (BikeAgent agent in agents)
-                {
-                    float d = (smoothCameraPos - agent.Position).sqrMagnitude;
-                    if (d < min && agent != targetAgent)
-                    {
-                        min = d;
-                        cluster.Clear();
-                        cluster.Add(agent);
-                    }
-                }
-            }
-            else
-            {
-                cluster.Sort();
-            }
-
-            clusterTail = cluster[0];
-            clusterLead = cluster[cluster.Count - 1];
-        }
-
-        // Stationary Camera.
-
-        private void StartSidelineMode()
-        {
-            mode = Mode.Sideline;
-            FindCluster();
-
-            targetDamp = sidelineTargetDamp;
-            cameraDamp = sidelineCameraDamp;
-            targetAgent = clusterTail;
-            sidelinePos = track.Positions.AtDegree(
-                clusterLead.Shared.CrntPos.PosDeg + sidelineZOffset);
-            cameraPos =
-                sidelinePos.PosV3 +
-                sidelinePos.Orthogonal * sidelineXOffset * Mathf.Sign(sidelinePos.Curvature) +
-                sidelinePos.Normal * sidelineYOffset;
-        }
-
-        private void UpdateSidelineMode()
-        {
-            if (Mathf.DeltaAngle(sidelinePos.PosDeg,
-                targetAgent.Shared.CrntPos.PosDeg) > sidelineStopThresh)
-            {
-                StopSidelineMode();
-            }
-        }
-
-        private void StopSidelineMode()
-        {
-            PickRandomMode();
-        }
-
-        // Following Camera.
-
-        private void StartFollowMode()
-        {
-            mode = Mode.Follow;
-            FindCluster();
-
-            targetDamp = followTargetDamp;
-            cameraDamp = followCameraDamp;
-            isFollowingTail = !isFollowingTail;
-            targetAgent = isFollowingTail ? clusterTail : clusterLead;
-            followZOffset = isFollowingTail ? followTailZOffset : followLeadZOffset;
-            Invoke("StopFollowMode", Random.Range(followMinDuration, followMaxDuration));
-        }
-
-        private void UpdateFollowMode()
-        {
-            Position pos = targetAgent.Shared.CrntPos;
-            cameraPos = targetAgent.Position +
-                pos.Normal * followYOffset +
-                pos.Tangent * followZOffset;
-        }
-
-        private void StopFollowMode()
-        {
-            CancelInvoke();
-            PickRandomMode();
-        }
-
-        private void PickRandomMode()
-        {
-            if (RndFlip(sidelineToFollowRatio))
-            {
-                StartFollowMode();
-            }
-            else
-            {
-                StartSidelineMode();
-            }
-        }
-
-        private void FixedUpdate()
-        {
-            switch (mode)
-            {
-                case Mode.Sideline:
-                    UpdateSidelineMode();
-                    InterpolatePositions();
-                    break;
-
-                case Mode.Follow:
-                    UpdateFollowMode();
-                    InterpolatePositions();
-                    break;
-
-                default:
-                    if (agents[0].Shared.CrntPos != null)
-                    {
-                        StartFollowMode();
-                    }
-                    break;
-            }
+            FindTarget();
+            SetStationaryCamPos();
         }
 
         private void LateUpdate()
         {
-            transform.position = smoothCameraPos;
-            transform.LookAt(smoothTargetPos);
-
-            float vol = Mathf.Min(-(cameraVelocity.magnitude - 50) / 25f, 0);
-            audioMixer?.SetFloat("BikeGroupVolume", vol);
+            if (m_IsStationary)
+            {
+                UpdateStationary();
+            }
+            else
+            {
+                UpdateFollow();
+            }
         }
 
-        private static bool RndFlip(float probability = 0.5f)
+        private void Switch()
         {
-            return Random.value <= probability;
+            FindTarget();
+
+            m_IsStationary = !m_IsStationary || Random.value < 0.5f;
+
+            if (m_IsStationary)
+            {
+                m_DistanceSwitchEnabled = false;
+                SetStationaryCamPos();
+            }
+            else
+            {
+                Invoke("Switch", m_FollowDuration);
+            }
         }
 
-        // private void UpdateZoom()
-        // {
-        //     float distance = (targetAgent.Position - transform.position).magnitude;
+        private void FindTarget()
+        {
+            m_TargetAgent = m_Agents.OrderByDescending(o => o.NumNearbyOpponents).First();
+        }
 
-        //     if (isZoomedIn)
-        //     {
-        //         if (distance < zoomOutThresh)
-        //         {
-        //             isZoomedIn = false;
-        //         }
-        //     }
-        //     else if (distance > zoomInThresh)
-        //     {
-        //         isZoomedIn = true;
-        //     }
+        private void SetStationaryCamPos()
+        {
+            var p = m_Track.GetPoint(m_TargetAgent.TrackPoint.Index + m_StationaryOffset);
+            bool inside = Random.value < 0.5f;
 
-        //     cam.fieldOfView = Mathf.SmoothDamp(cam.fieldOfView,
-        //         isZoomedIn ? zoomInFOV : zoomOutFOV, ref zoomVelocity, zoomDamp);
-        // }
+            if (inside)
+            {
+                m_CamPos = p.Position;
+            }
+            else
+            {
+                m_CamPos = p.Position + p.Up * Random.Range(5f, 20f);
+            }
+        }
+
+        private void UpdateStationary()
+        {
+            Vector3 pSelf = transform.position;
+            Vector3 pAgent = m_TargetAgent.transform.position;
+            transform.position = Vector3.SmoothDamp(pSelf, m_CamPos, ref m_MoveVlc, m_MoveDampStationary);
+            m_LookDir = Vector3.SmoothDamp(m_LookDir, (pAgent - pSelf).normalized, ref m_LookVlc, m_LookDampStationary);
+            transform.rotation = Quaternion.LookRotation(m_LookDir);
+
+            float distance = (pAgent - pSelf).magnitude;
+            if (m_DistanceSwitchEnabled)
+            {
+                if (distance > m_SwitchDistance)
+                {
+                    Switch();
+                }
+            }
+            else if (distance < m_SwitchDistance)
+            {
+                m_DistanceSwitchEnabled = true;
+            }
+        }
+
+        private void UpdateFollow()
+        {
+            var p = m_Track.GetPoint(m_TargetAgent.TrackPoint.Index - m_DistanceFollowing);
+            m_CamPos = p.Position + p.Forward * m_TargetAgent.ZOffset;
+
+            Vector3 pSelf = transform.position;
+            transform.position = Vector3.SmoothDamp(pSelf, m_CamPos, ref m_MoveVlc, m_MoveDampFollow);
+            m_LookDir = Vector3.SmoothDamp(m_LookDir, p.Forward, ref m_LookVlc, m_LookDampFollow);
+            transform.rotation = Quaternion.LookRotation(m_LookDir);
+        }
     }
 }
